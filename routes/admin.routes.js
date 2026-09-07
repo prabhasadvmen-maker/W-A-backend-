@@ -3,8 +3,8 @@ const router = express.Router();
 const { protect, authorizeRoles } = require('../middleware/auth.middleware');
 const adminCtrl = require('../controllers/admin.controller');
 
-// All routes require authentication and admin or superadmin role
-router.use(protect, authorizeRoles('admin', 'superadmin'));
+// All routes require authentication and admin role
+router.use(protect, authorizeRoles('admin'));
 
 router.get('/stats', adminCtrl.getStats);
 router.get('/clients', adminCtrl.listClients);

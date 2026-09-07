@@ -5,7 +5,7 @@ const clientScope = (req, res, next) => {
 
   if (
     req.user &&
-    (req.user.role === 'admin' || req.user.role === 'superadmin') &&
+    req.user.role === 'admin' &&
     req.headers['x-client-id']
   ) {
     const clientId = req.headers['x-client-id'];

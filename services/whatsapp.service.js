@@ -5,15 +5,34 @@ const apiVersion = () => process.env.WHATSAPP_API_VERSION || 'v19.0';
 
 async function getCreds(userId) {
   const user = await User.findById(userId).select('+whatsappAccessToken');
-  if (!user?.whatsappPhoneNumberId || !user?.whatsappAccessToken) {
-    const err = new Error('WhatsApp not connected. Add Phone Number ID and Access Token.');
+  if (!user) {
+    const err = new Error('User not found.');
     err.statusCode = 400;
     throw err;
   }
-  return {
-    phoneNumberId: user.whatsappPhoneNumberId,
-    token: user.whatsappAccessToken,
-  };
+
+  // If user has their own credentials, use them
+  if (user.whatsappPhoneNumberId && user.whatsappAccessToken) {
+    return {
+      phoneNumberId: user.whatsappPhoneNumberId,
+      token: user.whatsappAccessToken,
+    };
+  }
+
+  // Fallback: use parentAdmin's credentials (for client users)
+  if (user.parentAdmin) {
+    const admin = await User.findById(user.parentAdmin).select('+whatsappAccessToken');
+    if (admin?.whatsappPhoneNumberId && admin?.whatsappAccessToken) {
+      return {
+        phoneNumberId: admin.whatsappPhoneNumberId,
+        token: admin.whatsappAccessToken,
+      };
+    }
+  }
+
+  const err = new Error('WhatsApp not connected. Add Phone Number ID and Access Token.');
+  err.statusCode = 400;
+  throw err;
 }
 
 function graphUrl(phoneNumberId, path = '') {

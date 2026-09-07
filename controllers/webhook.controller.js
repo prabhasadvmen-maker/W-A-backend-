@@ -97,26 +97,25 @@ async function sendExternalAgentReply(userId, conv, textBody) {
 
   try {
     let aiReply = '';
+    const groqService = require('../services/groq.service');
     logDebug(`Looking up AIAgent mapping for userId: ${userId}`);
     const mapping = await AIAgent.findOne({ userId });
-    logDebug(`Found mapping in DB: ${JSON.stringify(mapping)}`);
 
-    if (!mapping || !mapping.externalAgentId) {
-      logDebug(`No AI Agent ID configured for user: ${userId}`);
-      return;
+    if (mapping && mapping.externalAgentId) {
+      try {
+        logDebug(`Sending query to external agent: ${mapping.externalAgentId}`);
+        aiReply = await ugcService.askAgent(mapping.externalAgentId, textBody, conv.customerPhone);
+        logDebug(`Received answer from external agent: "${aiReply}"`);
+      } catch (agentErr) {
+        logDebug(`External agent query failed: ${agentErr.message}`);
+      }
     }
 
-    try {
-      logDebug(`Sending query to external agent: ${mapping.externalAgentId}`);
-      logDebug(`Question: "${textBody}"`);
-      logDebug(`Customer Phone: ${conv.customerPhone}`);
-      
-      aiReply = await ugcService.askAgent(mapping.externalAgentId, textBody, conv.customerPhone);
-      
-      logDebug(`Received answer from external agent: "${aiReply}"`);
-    } catch (agentErr) {
-      logDebug(`External agent query failed: ${agentErr.message}`);
-      return; // Groq completely commented out/removed
+    // Fallback or primary Groq AI query if GROQ_API_KEY is set in .env
+    if (!aiReply && process.env.GROQ_API_KEY) {
+      logDebug(`Querying Groq AI Engine for question: "${textBody}"`);
+      aiReply = await groqService.generateGroqReply(textBody);
+      logDebug(`Received answer from Groq AI: "${aiReply}"`);
     }
 
     if (!aiReply) {

@@ -7,16 +7,9 @@ const superadminCtrl = require('../controllers/superadmin.controller');
 router.use(protect, authorizeRoles('superadmin'));
 
 router.get('/stats', superadminCtrl.getStats);
-router.get('/admins', superadminCtrl.listAdmins);
-router.post('/admins', superadminCtrl.createAdmin);
-router.put('/admins/:id', superadminCtrl.updateAdmin);
-router.delete('/admins/:id', superadminCtrl.deleteAdmin);
-router.post('/admins/:id/api-sharing', superadminCtrl.generateApiSharing);
-router.delete('/admins/:id/api-sharing', superadminCtrl.revokeApiSharing);
-router.get('/clients', superadminCtrl.listAllClients);
-router.put('/clients/:id', superadminCtrl.updateClient);
-router.delete('/clients/:id', superadminCtrl.deleteClient);
-router.post('/clients/:id/api-sharing', superadminCtrl.generateClientApiSharing);
-router.delete('/clients/:id/api-sharing', superadminCtrl.revokeClientApiSharing);
+router.get('/users', superadminCtrl.listUsers);
+router.patch('/users/:id/status', superadminCtrl.updateUserStatus);
+router.patch('/users/:id', superadminCtrl.updateUser);
+router.delete('/users/:id', superadminCtrl.deleteUser);
 
 module.exports = router;

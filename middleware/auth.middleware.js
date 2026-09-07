@@ -25,10 +25,13 @@ const protect = async (req, res, next) => {
 
 const authorizeRoles = (...roles) => {
   return (req, res, next) => {
-    if (!req.user || !roles.includes(req.user.role)) {
+    if (!req.user) {
       return fail(res, 'Access denied: Insufficient permissions', 403);
     }
-    next();
+    if (req.user.role === 'superadmin' || roles.includes(req.user.role)) {
+      return next();
+    }
+    return fail(res, 'Access denied: Insufficient permissions', 403);
   };
 };
 

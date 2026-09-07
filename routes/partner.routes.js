@@ -11,11 +11,11 @@ const partnerProtect = async (req, res, next) => {
       return res.status(401).json({ success: false, message: 'Unauthorized: Missing x-partner-key header' });
     }
 
-    // Find active Admin or Superadmin with this sharing key
+    // Find active Admin with this sharing key
     const admin = await User.findOne({
       'apiSharing.apiSharingKey': partnerKey,
       'apiSharing.isEnabled': true,
-      role: { $in: ['admin', 'superadmin'] }
+      role: 'admin'
     });
 
     if (!admin) {

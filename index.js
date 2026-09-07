@@ -20,10 +20,10 @@ const botRoutes = require('./routes/bot.routes');
 const inboxRoutes = require('./routes/inbox.routes');
 const analyticsRoutes = require('./routes/analytics.routes');
 const webhookRoutes = require('./routes/webhook.routes');
-const superadminRoutes = require('./routes/superadmin.routes');
 const adminRoutes = require('./routes/admin.routes');
 const photoshareRoutes = require('./routes/photoshare.routes');
 const partnerRoutes = require('./routes/partner.routes');
+const superadminRoutes = require('./routes/superadmin.routes');
 const { protect } = require('./middleware/auth.middleware');
 const authController = require('./controllers/auth.controller');
 
@@ -35,8 +35,6 @@ initSocket(server);
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Dynamic CORS: Allow the origin so that the request can proceed to the API Key middleware
-      // We reflect the origin back to allow credentials (cookies) to work for authorized clients
       callback(null, origin || true);
     },
     credentials: true,
@@ -47,34 +45,21 @@ app.use(cookieParser());
 
 // Global API Key Security Middleware
 app.use('/api', async (req, res, next) => {
-  // Allow preflight requests
   if (req.method === 'OPTIONS') return next();
-  
-  // Exclude webhooks (called by Meta/WhatsApp)
   if (req.path.startsWith('/webhook')) return next();
-  
-  // Exclude health check
   if (req.path.startsWith('/health')) return next();
-
-  // Exclude API Sharing Login (used by external apps to get initial token)
   if (req.path === '/auth/api-sharing-login') return next();
-
-  // Exclude Partner Integration APIs (authorized via partner middleware)
   if (req.path.startsWith('/partner')) return next();
 
   const providedKey = req.headers['x-api-key'];
-
-  // 1. Check if it's the master internal key (used by the core W-A-frontend SaaS)
   if (providedKey === (process.env.VALID_API_KEYS || 'whatsai-core-master-secret-key-2026')) {
     return next();
   }
 
-  // 2. Check if an API key is provided at all
   if (!providedKey) {
     return res.status(403).json({ success: false, message: 'Forbidden: Missing API Key' });
   }
 
-  // 3. Dynamic Database Check for external clients (API Sharing)
   try {
     const User = require('./models/User');
     const userExists = await User.exists({ 
@@ -107,8 +92,8 @@ app.use('/api/bot', botRoutes);
 app.use('/api/inbox', inboxRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/webhook', webhookRoutes);
-app.use('/api/superadmin', superadminRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/superadmin', superadminRoutes);
 app.use('/api/photoshare', photoshareRoutes);
 app.use('/api/partner', partnerRoutes);
 
@@ -119,53 +104,12 @@ app.get('/api/health', (req, res) => {
 app.use(notFound);
 app.use(errorHandler);
 
-const PORT = 5005;
-
-async function syncSuperAdmin() {
-  try {
-    require('dotenv').config({ override: true });
-    const email = (process.env.SUPER_ADMIN_EMAIL || process.env.SUPERADMIN_EMAIL || 'superadmin@gmail.com').toLowerCase().trim();
-    const password = process.env.SUPER_ADMIN_PASSWORD || process.env.SUPERADMIN_PASSWORD || 'vijaywiz@123';
-    const name = process.env.SUPER_ADMIN_NAME || process.env.SUPERADMIN_NAME || 'Vijay Wiz';
-
-    const User = require('./models/User');
-    let user = await User.findOne({ role: 'superadmin' }).select('+password');
-    if (!user) {
-      user = await User.findOne({ email }).select('+password');
-    }
-    if (!user) {
-      user = new User({
-        name,
-        email,
-        password,
-        role: 'superadmin',
-        plan: 'enterprise',
-        isVerified: true,
-        status: 'active'
-      });
-      await user.save();
-      info(`👑 Created Super Admin from .env: ${email}`);
-    } else {
-      let changed = false;
-      if (user.email !== email) { user.email = email; changed = true; }
-      if (user.name !== name) { user.name = name; changed = true; }
-      if (!(await user.comparePassword(password))) { user.password = password; changed = true; }
-      if (user.role !== 'superadmin') { user.role = 'superadmin'; changed = true; }
-      if (changed) {
-        await user.save();
-        info(`👑 Synchronized Super Admin from .env: ${email}`);
-      }
-    }
-  } catch (err) {
-    error('Error syncing Super Admin from .env:', { reason: err.message });
-  }
-}
+const PORT = process.env.PORT || 5000;
 
 async function bootstrap() {
   try {
     validateEnv();
     await connectDB();
-    await syncSuperAdmin();
 
     // One-time migration for existing photo templates
     try {
@@ -207,6 +151,46 @@ async function bootstrap() {
       }
     } catch (foldErr) {
       error('Failed to manually update testing-1 folder times:', foldErr);
+    }
+
+    // Seed SuperAdmin from .env & remove legacy "Vijay Wiz" profile names
+    try {
+      const User = require('./models/User');
+      const email = (process.env.SUPERADMIN_EMAIL || 'superadmin@gmail.com').toLowerCase().trim();
+      const password = process.env.SUPERADMIN_PASSWORD || 'superadmin@9090';
+
+      let sa = await User.findOne({ email }).select('+password');
+      if (!sa) {
+        sa = await User.create({
+          name: 'Super Admin',
+          email,
+          password,
+          role: 'superadmin',
+          status: 'active',
+          plan: 'enterprise',
+          businessName: 'WHATS-AI Platform Owner',
+        });
+        info(`✅ SuperAdmin account seeded: ${email}`);
+      } else {
+        sa.name = 'Super Admin';
+        sa.businessName = 'WHATS-AI Platform Owner';
+        sa.role = 'superadmin';
+        sa.status = 'active';
+        sa.password = password;
+        await sa.save();
+        info(`✅ SuperAdmin synchronized: ${email}`);
+      }
+
+      // Clean up any remaining legacy "Vijay Wiz" records in database
+      const cleaned = await User.updateMany(
+        { name: /vijay wiz/i },
+        { $set: { name: 'Super Admin' } }
+      );
+      if (cleaned.modifiedCount > 0) {
+        info(`✅ Cleaned ${cleaned.modifiedCount} legacy Vijay Wiz user profiles in DB.`);
+      }
+    } catch (saErr) {
+      error('Failed to seed/clean SuperAdmin:', saErr);
     }
 
     server.on('error', (e) => {

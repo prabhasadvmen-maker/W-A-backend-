@@ -6,7 +6,7 @@ function parseBool(value, fallback = false) {
 }
 
 function validateEnv() {
-  process.env.PORT = '5005';
+  process.env.PORT = process.env.PORT || '5000';
   const required = ['PORT', 'MONGO_URI', 'JWT_SECRET', 'JWT_REFRESH_SECRET', 'CLIENT_URL'];
   const missing = required.filter((k) => !process.env[k]);
   if (missing.length) {

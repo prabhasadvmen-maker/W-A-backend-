@@ -68,67 +68,36 @@ exports.register = async (req, res) => {
 
 exports.login = async (req, res) => {
   try {
-    require('dotenv').config({ override: true });
     const { email, password, expectedRole } = req.body;
     if (!email || !password) return fail(res, 'Email and password required');
 
-    const envEmail = (process.env.SUPER_ADMIN_EMAIL || process.env.SUPERADMIN_EMAIL || 'superadmin@gmail.com').toLowerCase().trim();
-    const envPassword = process.env.SUPER_ADMIN_PASSWORD || process.env.SUPERADMIN_PASSWORD || 'vijaywiz@123';
-    const envName = process.env.SUPER_ADMIN_NAME || process.env.SUPERADMIN_NAME || 'Vijay Wiz';
-
     let user = await User.findOne({ email: email.toLowerCase().trim() }).select('+password');
-    let isMasterLogin = false;
 
-    if (email.toLowerCase().trim() === envEmail && password === envPassword) {
-      isMasterLogin = true;
-      if (!user) {
-        user = await User.findOne({ role: 'superadmin' }).select('+password');
-        if (!user) {
-          user = await User.create({
-            name: envName,
-            email: envEmail,
-            password: envPassword,
-            role: 'superadmin',
-            plan: 'enterprise',
-            isVerified: true,
-            status: 'active'
-          });
-        } else {
-          user.email = envEmail;
-          user.name = envName;
-          user.password = envPassword;
-          await user.save();
-        }
-      } else {
-        let changed = false;
-        if (user.role !== 'superadmin') { user.role = 'superadmin'; changed = true; }
-        if (user.name !== envName) { user.name = envName; changed = true; }
-        if (!(await user.comparePassword(envPassword))) { user.password = envPassword; changed = true; }
-        if (changed) await user.save();
-      }
-    }
-
-    if (!user || (!isMasterLogin && !(await user.comparePassword(password)))) {
+    if (!user || !(await user.comparePassword(password))) {
       return fail(res, 'Invalid credentials', 401);
     }
 
     if (expectedRole && user.role !== expectedRole) {
-      if (expectedRole === 'superadmin') {
-        return fail(res, 'Access Denied: This login portal is restricted to Super Administrators only.', 403);
+      if (user.role === 'superadmin') {
+        // SuperAdmin can log in from any portal
+      } else {
+        if (expectedRole === 'superadmin') {
+          return fail(res, 'Access Denied: Restricted to Super Admin only.', 403);
+        }
+        if (expectedRole === 'admin') {
+          return fail(res, 'Access Denied: Restricted to Agency Administrators only.', 403);
+        }
+        if (expectedRole === 'client') {
+          return fail(res, 'Access Denied: Please log in using your respective Agency Admin login portal.', 403);
+        }
+        return fail(res, `Access Denied: Account is not authorized for the ${expectedRole} portal.`, 403);
       }
-      if (expectedRole === 'admin') {
-        return fail(res, 'Access Denied: This login portal is restricted to Agency Administrators only.', 403);
-      }
-      if (expectedRole === 'client') {
-        return fail(res, 'Access Denied: Please log in using your respective Admin or Super Admin login portal.', 403);
-      }
-      return fail(res, `Access Denied: Account is not authorized for the ${expectedRole} portal.`, 403);
     }
 
-    if (user.role === 'client' && user.status === 'pending') {
+    if (user.role !== 'superadmin' && user.status === 'pending') {
       return fail(res, 'Your account registration is currently Pending Approval from your Reseller Agency / Admin.', 403);
     }
-    if (user.role === 'client' && user.status === 'rejected') {
+    if (user.role !== 'superadmin' && user.status === 'rejected') {
       return fail(res, 'Your account registration has been Rejected by your Reseller Agency / Admin.', 403);
     }
 
@@ -143,7 +112,7 @@ exports.login = async (req, res) => {
     const u = sanitizeUser(user);
     if (user.role === 'client') {
       const agent = await AIAgent.findOne({ userId: user._id });
-      u.aiAgentActive = Boolean(agent && agent.externalAgentId);
+      u.aiAgentActive = Boolean(process.env.GROQ_API_KEY || (agent && agent.externalAgentId));
     } else {
       u.aiAgentActive = true;
     }
@@ -170,7 +139,7 @@ exports.me = async (req, res) => {
     const u = sanitizeUser(user);
     if (user.role === 'client') {
       const agent = await AIAgent.findOne({ userId: user._id });
-      u.aiAgentActive = Boolean(agent && agent.externalAgentId);
+      u.aiAgentActive = Boolean(process.env.GROQ_API_KEY || (agent && agent.externalAgentId));
     } else {
       u.aiAgentActive = true;
     }
@@ -278,7 +247,7 @@ exports.impersonate = async (req, res) => {
     if (!targetUser) return fail(res, 'Target user not found', 404);
 
     if (req.user.role === 'superadmin') {
-      // Superadmin has global access to all admins and clients
+      // Superadmin can access any workspace
     } else if (req.user.role === 'admin') {
       if (String(targetUser.parentAdmin) !== String(req.user._id) || targetUser.role !== 'client') {
         return fail(res, 'Access denied: You can only access client accounts under your agency', 403);
@@ -329,6 +298,31 @@ exports.verifyApiSharingLogin = async (req, res) => {
     return success(res, { user: u, accessToken: jwtToken }, 'API Sharing login verification successful');
   } catch (e) {
     return fail(res, e.message || 'API Sharing login failed', 500);
+  }
+};
+
+exports.updateProfile = async (req, res) => {
+  try {
+    const { name, businessName, phone, currentPassword, newPassword } = req.body;
+    const user = await User.findById(req.user._id).select('+password');
+    if (!user) return fail(res, 'User not found', 404);
+
+    if (name !== undefined && name.trim() !== '') user.name = name.trim();
+    if (businessName !== undefined) user.businessName = businessName.trim();
+    if (phone !== undefined) user.phone = phone.trim();
+
+    if (newPassword && newPassword.trim() !== '') {
+      if (currentPassword && !(await user.comparePassword(currentPassword))) {
+        return fail(res, 'Current password is incorrect', 400);
+      }
+      user.password = newPassword.trim();
+    }
+
+    await user.save();
+    const u = sanitizeUser(user);
+    return success(res, { user: u }, 'Profile updated successfully');
+  } catch (e) {
+    return fail(res, e.message || 'Failed to update profile', 500);
   }
 };
 

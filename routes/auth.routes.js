@@ -9,6 +9,7 @@ router.post('/refresh', auth.refresh);
 router.post('/reset-password', auth.resetPassword);
 router.post('/logout', protect, auth.logout);
 router.get('/me', protect, auth.me);
+router.put('/profile', protect, auth.updateProfile);
 router.post('/impersonate', protect, auth.impersonate);
 router.post('/api-sharing-login', auth.verifyApiSharingLogin);
 

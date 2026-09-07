@@ -116,10 +116,7 @@ exports.adminListClientTemplates = async (req, res) => {
     const client = await User.findOne({
       _id: clientId,
       role: 'client',
-      $or: [
-        { parentAdmin: req.user._id },
-        ...(req.user.role === 'superadmin' ? [{}] : []),
-      ],
+      parentAdmin: req.user._id,
     });
     if (!client) return fail(res, 'Client not found or not accessible', 404);
 
@@ -324,8 +321,8 @@ exports.adminDeleteTemplate = async (req, res) => {
     const template = await Template.findById(req.params.templateId);
     if (!template) return fail(res, 'Template not found', 404);
 
-    // Authorization check: Must be owner admin OR superadmin
-    if (req.user.role !== 'superadmin' && String(template.userId) !== String(req.user._id)) {
+    // Authorization check: Must be owner admin
+    if (String(template.userId) !== String(req.user._id)) {
       return fail(res, 'Template is not yours to delete', 403);
     }
 
