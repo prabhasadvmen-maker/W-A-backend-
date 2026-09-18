@@ -17,11 +17,12 @@ function signRefresh(userId) {
 }
 
 function setRefreshCookie(res, token) {
+  const isProd = process.env.NODE_ENV === 'production';
   res.cookie('refreshToken', token, {
     httpOnly: true,
     maxAge: COOKIE_MAX_AGE,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    sameSite: isProd ? 'none' : 'lax',
+    secure: isProd,
     path: '/',
   });
 }
