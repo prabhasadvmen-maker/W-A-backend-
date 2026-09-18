@@ -2,6 +2,8 @@ const User = require('../models/User');
 const Campaign = require('../models/Campaign');
 const Message = require('../models/Message');
 const AIAgent = require('../models/AIAgent');
+const Template = require('../models/Template');
+const { fetchMetaTemplates } = require('../services/whatsapp.service');
 const { success, fail } = require('../utils/apiResponse');
 
 exports.getStats = async (req, res) => {
@@ -117,5 +119,49 @@ exports.deleteUser = async (req, res) => {
     return success(res, null, 'User deleted successfully');
   } catch (e) {
     return fail(res, e.message || 'Failed to delete user', 500);
+  }
+};
+
+// ─── TEMPLATE MANAGEMENT ─────────────────────────────────────────────────────
+
+exports.listAllTemplates = async (req, res) => {
+  try {
+    const templates = await Template.find({})
+      .populate('userId', 'name email businessName')
+      .populate('assignedTo', 'name email')
+      .sort({ createdAt: -1 });
+    return success(res, { templates }, `${templates.length} templates found`);
+  } catch (e) {
+    return fail(res, e.message || 'Failed to list templates', 500);
+  }
+};
+
+exports.deleteTemplate = async (req, res) => {
+  try {
+    const t = await Template.findByIdAndDelete(req.params.templateId);
+    if (!t) return fail(res, 'Template not found', 404);
+    return success(res, null, 'Template deleted');
+  } catch (e) {
+    return fail(res, e.message || 'Delete failed', 500);
+  }
+};
+
+exports.refreshTemplateStatus = async (req, res) => {
+  try {
+    const template = await Template.findById(req.params.templateId);
+    if (!template) return fail(res, 'Template not found', 404);
+
+    const metaTemplates = await fetchMetaTemplates(template.userId);
+    const match = metaTemplates.find(
+      (m) => m.name.toLowerCase() === template.whatsappTemplateName.toLowerCase()
+    );
+    if (match) {
+      template.metaStatus = match.status;
+      await template.save();
+    }
+    return success(res, { template }, match ? `Status: ${match.status}` : 'Not found on Meta');
+  } catch (e) {
+    const msg = e.response?.data?.error?.message || e.message || 'Refresh failed';
+    return fail(res, msg, 500);
   }
 };
