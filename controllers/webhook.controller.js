@@ -85,45 +85,37 @@ async function sendNodeResponse(userId, customerPhone, node, convId) {
 }
 
 async function sendExternalAgentReply(userId, conv, textBody) {
-  const fs = require('fs');
-  const path = require('path');
-  const logPath = path.join(__dirname, '../debug_webhook.log');
-  
-  function logDebug(msg) {
-    const timestamp = new Date().toISOString();
-    fs.appendFileSync(logPath, `[${timestamp}] ${msg}\n`);
-    console.log(`[DEBUG Webhook] ${msg}`);
-  }
-
   try {
     let aiReply = '';
     const groqService = require('../services/groq.service');
-    logDebug(`Looking up AIAgent mapping for userId: ${userId}`);
     const mapping = await AIAgent.findOne({ userId });
 
     if (mapping && mapping.externalAgentId) {
       try {
-        logDebug(`Sending query to external agent: ${mapping.externalAgentId}`);
         aiReply = await ugcService.askAgent(mapping.externalAgentId, textBody, conv.customerPhone);
-        logDebug(`Received answer from external agent: "${aiReply}"`);
       } catch (agentErr) {
-        logDebug(`External agent query failed: ${agentErr.message}`);
+        console.log(`[AI] External agent failed: ${agentErr.message}`);
       }
     }
 
-    // Fallback or primary Groq AI query if GROQ_API_KEY is set in .env
+    // Use Groq with conversation history for continuous promotional chat
     if (!aiReply && process.env.GROQ_API_KEY) {
-      logDebug(`Querying Groq AI Engine for question: "${textBody}"`);
-      aiReply = await groqService.generateGroqReply(textBody);
-      logDebug(`Received answer from Groq AI: "${aiReply}"`);
+      const history = (conv.aiChatHistory || []).map(h => ({ role: h.role, content: h.content }));
+      aiReply = await groqService.generateGroqReply(textBody, history);
     }
 
-    if (!aiReply) {
-      logDebug(`AI reply is empty, skipping WhatsApp message send.`);
-      return;
-    }
+    if (!aiReply) return;
+
     const phone = String(conv.customerPhone).replace(/\D/g, '');
     const apiRes = await whatsapp.sendTextMessage(userId, phone, aiReply);
+
+    // Save conversation history (keep last 20 turns)
+    conv.aiChatHistory = conv.aiChatHistory || [];
+    conv.aiChatHistory.push({ role: 'user', content: textBody });
+    conv.aiChatHistory.push({ role: 'assistant', content: aiReply });
+    if (conv.aiChatHistory.length > 20) conv.aiChatHistory = conv.aiChatHistory.slice(-20);
+    await conv.save();
+
     await Message.create({
       userId,
       conversationId: conv._id,
@@ -135,11 +127,9 @@ async function sendExternalAgentReply(userId, conv, textBody) {
       status: 'sent',
       whatsappMessageId: apiRes?.messages?.[0]?.id || '',
     });
-    emitToUser(String(userId), 'inbox:newMessage', {
-      conversationId: String(conv._id),
-    });
+    emitToUser(String(userId), 'inbox:newMessage', { conversationId: String(conv._id) });
   } catch (err) {
-    logDebug(`AI reply error: ${err.message}`);
+    console.error(`[AI Reply Error] ${err.message}`);
   }
 }
 
@@ -197,15 +187,21 @@ async function processBot(userId, conv, textBody) {
                 await conv.save();
               }
             }
+            // Agar ab koi menu nahi — AI se continue karo
+            if (!conv.botContext.awaitingMenu) {
+              await sendExternalAgentReply(userId, conv, textBody);
+            }
           }
         } else {
           conv.botContext.awaitingMenu = false;
           conv.botContext.currentNodeId = '';
           await conv.save();
+          // Flow khatam — AI engage karo
+          await sendExternalAgentReply(userId, conv, textBody);
         }
         return;
       }
-      // Menu option match nahi hua — External Agent se reply
+      // Menu option match nahi hua — AI se reply
       await sendExternalAgentReply(userId, conv, textBody);
       return;
     }
@@ -218,13 +214,16 @@ async function processBot(userId, conv, textBody) {
     incoming === 'start';
 
   if (!triggered) {
-    // Trigger word nahi — External Agent se reply
+    // Trigger word nahi — AI se reply karo
     await sendExternalAgentReply(userId, conv, textBody);
     return;
   }
 
   const start = flow.nodes[0];
-  if (!start) return;
+  if (!start) {
+    await sendExternalAgentReply(userId, conv, textBody);
+    return;
+  }
 
   await sendNodeResponse(userId, conv.customerPhone, start, convId);
   conv.botContext = {
@@ -234,6 +233,8 @@ async function processBot(userId, conv, textBody) {
   };
   await conv.save();
 
+  // Bot flow ka last node — chain karo
+  let lastNode = start;
   if (start.type !== 'menu' && start.nextNodeId) {
     const n2 = findNode(flow, start.nextNodeId);
     if (n2) {
@@ -241,7 +242,13 @@ async function processBot(userId, conv, textBody) {
       conv.botContext.currentNodeId = n2.id;
       conv.botContext.awaitingMenu = n2.type === 'menu';
       await conv.save();
+      lastNode = n2;
     }
+  }
+
+  // Bot flow end ho gaya (no menu awaiting) — AI se follow-up karo
+  if (!conv.botContext.awaitingMenu) {
+    await sendExternalAgentReply(userId, conv, textBody);
   }
 }
 

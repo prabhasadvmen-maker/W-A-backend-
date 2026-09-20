@@ -20,6 +20,12 @@ const conversationSchema = new mongoose.Schema(
       awaitingMenu: { type: Boolean, default: false },
     },
     isAIPaused: { type: Boolean, default: false },
+    aiChatHistory: [
+      {
+        role: { type: String, enum: ['user', 'assistant'] },
+        content: { type: String },
+      },
+    ],
     activePhotoshareFolderId: { type: mongoose.Schema.Types.ObjectId, ref: 'PhotoshareFolder', default: null },
   },
   { timestamps: true }
