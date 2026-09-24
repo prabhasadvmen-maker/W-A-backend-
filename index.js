@@ -23,6 +23,7 @@ const webhookRoutes = require('./routes/webhook.routes');
 const adminRoutes = require('./routes/admin.routes');
 const photoshareRoutes = require('./routes/photoshare.routes');
 const partnerRoutes = require('./routes/partner.routes');
+const bulkMessageRoutes = require('./routes/bulkMessage.routes');
 const superadminRoutes = require('./routes/superadmin.routes');
 const { protect } = require('./middleware/auth.middleware');
 const authController = require('./controllers/auth.controller');
@@ -105,6 +106,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/superadmin', superadminRoutes);
 app.use('/api/photoshare', photoshareRoutes);
 app.use('/api/partner', partnerRoutes);
+app.use('/api/bulk', bulkMessageRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({ success: true, data: { ok: true }, message: 'OK' });
