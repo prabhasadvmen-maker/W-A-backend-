@@ -43,37 +43,30 @@ async function generateGroqReply(question, history = [], systemPrompt = null) {
     { role: 'user', content: question },
   ];
 
-  try {
-    const response = await axios.post(
-      GROQ_API_URL,
-      { model: 'groq/compound', messages, temperature: 0.75, max_tokens: 300 },
-      {
-        headers: { 'Authorization': `Bearer ${apiKey.trim()}`, 'Content-Type': 'application/json' },
-        timeout: 15000,
-      }
-    );
+  const models = ['openai/gpt-oss-20b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-120b'];
 
-    const reply = response.data?.choices?.[0]?.message?.content || '';
-    console.log(`[Groq Service] Generated AI reply via groq/compound (${reply.length} chars)`);
-    return reply.trim();
-  } catch (err) {
+  for (const model of models) {
     try {
-      console.warn(`[Groq Service] Retrying with groq/compound-mini due to: ${err.response?.data?.error?.message || err.message}`);
-      const fallbackResponse = await axios.post(
+      const response = await axios.post(
         GROQ_API_URL,
-        { model: 'groq/compound-mini', messages, temperature: 0.75, max_tokens: 300 },
+        { model, messages, temperature: 0.75, max_tokens: 300 },
         {
           headers: { 'Authorization': `Bearer ${apiKey.trim()}`, 'Content-Type': 'application/json' },
           timeout: 15000,
         }
       );
-      const fallbackReply = fallbackResponse.data?.choices?.[0]?.message?.content || '';
-      return fallbackReply.trim();
-    } catch (fallbackErr) {
-      console.error('[Groq Service] Failed to generate Groq AI reply:', fallbackErr.response?.data || fallbackErr.message);
-      return null;
+      const reply = response.data?.choices?.[0]?.message?.content || '';
+      if (reply.trim()) {
+        console.log(`[Groq Service] AI reply via ${model} (${reply.trim().length} chars)`);
+        return reply.trim();
+      }
+    } catch (err) {
+      console.warn(`[Groq Service] Model ${model} failed: ${err.response?.data?.error?.message || err.message}`);
     }
   }
+
+  console.error('[Groq Service] All models failed.');
+  return null;
 }
 
 module.exports = {
