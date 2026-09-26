@@ -2,6 +2,7 @@ const Contact = require('../models/Contact');
 const Message = require('../models/Message');
 const Conversation = require('../models/Conversation');
 const Analytics = require('../models/Analytics');
+const Template = require('../models/Template');
 const whatsapp = require('../services/whatsapp.service');
 const { emitToUser } = require('../services/socket.service');
 const { success, fail } = require('../utils/apiResponse');
@@ -20,12 +21,14 @@ async function upsertAnalyticsDay(userId, patch) {
 // POST /api/bulk/send
 exports.sendBulkMessage = async (req, res) => {
   try {
-    const { message, numbers, groupId, scheduleAt } = req.body;
+    const { templateId, numbers, groupId } = req.body;
     const userId = req.targetUserId || req.user._id;
 
-    if (!message || !message.trim()) {
-      return fail(res, 'Message text is required', 400);
-    }
+    if (!templateId) return fail(res, 'Template is required', 400);
+
+    const template = await Template.findOne({ _id: templateId, userId });
+    if (!template) return fail(res, 'Template not found', 404);
+    if (template.metaStatus !== 'APPROVED') return fail(res, 'Template is not approved by Meta', 400);
 
     let phoneList = [];
 
@@ -41,10 +44,21 @@ exports.sendBulkMessage = async (req, res) => {
 
     // From manual numbers (comma/newline separated)
     if (numbers && numbers.trim()) {
-      const manual = numbers
+      const rawNums = numbers
         .split(/[\n,]+/)
         .map((n) => n.trim().replace(/\D/g, ''))
-        .filter((n) => n.length >= 10)
+        .filter((n) => n.length >= 10);
+
+      // Check opted-out contacts in DB for manual numbers
+      const optedOutContacts = await Contact.find({
+        userId,
+        phone: { $in: rawNums },
+        optedOut: true,
+      }).select('phone').lean();
+      const optedOutSet = new Set(optedOutContacts.map((c) => c.phone));
+
+      const manual = rawNums
+        .filter((n) => !optedOutSet.has(n))
         .map((n) => ({ phone: n, name: '' }));
       phoneList = [...phoneList, ...manual];
     }
@@ -75,8 +89,18 @@ exports.sendBulkMessage = async (req, res) => {
       for (let i = 0; i < phoneList.length; i++) {
         const { phone, name } = phoneList[i];
         try {
-          const apiRes = await whatsapp.sendTextMessage(userId, phone, message.trim());
+          const bodyParams = (template.sampleParams || []).map((p) => p.value || '');
+          const langCode = (template.languageCode || 'en').toLowerCase().replace('_', '_');
+          const apiRes = await whatsapp.sendTemplateMessage(
+            userId, phone,
+            template.whatsappTemplateName || template.name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, ''),
+            langCode,
+            bodyParams.length ? { body: bodyParams } : []
+          );
+          console.log(`[BulkMessage] Sent to ${phone} — wamid: ${apiRes?.messages?.[0]?.id}`);
           const wamid = apiRes?.messages?.[0]?.id || '';
+
+          const msgBody = template.bodyText || template.name;
 
           // Upsert conversation
           let conv = await Conversation.findOne({ userId, customerPhone: phone });
@@ -85,12 +109,12 @@ exports.sendBulkMessage = async (req, res) => {
               userId,
               customerPhone: phone,
               customerName: name,
-              lastMessage: message.trim(),
+              lastMessage: msgBody,
               lastMessageAt: new Date(),
               unreadCount: 0,
             });
           } else {
-            conv.lastMessage = message.trim();
+            conv.lastMessage = msgBody;
             conv.lastMessageAt = new Date();
             await conv.save();
           }
@@ -101,8 +125,8 @@ exports.sendBulkMessage = async (req, res) => {
             direction: 'outbound',
             from: 'business',
             to: phone,
-            body: message.trim(),
-            type: 'text',
+            body: msgBody,
+            type: 'template',
             status: 'sent',
             whatsappMessageId: wamid,
           });
@@ -112,7 +136,10 @@ exports.sendBulkMessage = async (req, res) => {
         } catch (err) {
           failed++;
           await upsertAnalyticsDay(userId, { failed: 1 });
-          console.error(`[BulkMessage] Failed to send to ${phone}:`, err.response?.data?.error?.message || err.message);
+          const errMsg = err.response?.data?.error?.message || err.message;
+          console.error(`[BulkMessage] Failed to send to ${phone}:`, errMsg);
+          // Emit individual failure so frontend can show details
+          emitToUser(String(userId), 'bulk:error', { phone, error: errMsg });
         }
 
         // Emit progress every 5 or on last
