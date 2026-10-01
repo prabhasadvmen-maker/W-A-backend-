@@ -4,6 +4,7 @@ const Conversation = require('../models/Conversation');
 const Analytics = require('../models/Analytics');
 const Template = require('../models/Template');
 const whatsapp = require('../services/whatsapp.service');
+const { uploadBuffer } = require('../services/r2.service');
 const { emitToUser } = require('../services/socket.service');
 const { success, fail } = require('../utils/apiResponse');
 
@@ -21,14 +22,34 @@ async function upsertAnalyticsDay(userId, patch) {
 // POST /api/bulk/send
 exports.sendBulkMessage = async (req, res) => {
   try {
-    const { templateId, numbers, groupId } = req.body;
+    const { templateId, numbers, groupId, messageType, message } = req.body;
     const userId = req.targetUserId || req.user._id;
 
-    if (!templateId) return fail(res, 'Template is required', 400);
+    let template = null;
+    let mediaUrl = null;
 
-    const template = await Template.findOne({ _id: templateId, userId });
-    if (!template) return fail(res, 'Template not found', 404);
-    if (template.metaStatus !== 'APPROVED') return fail(res, 'Template is not approved by Meta', 400);
+    if (templateId) {
+      template = await Template.findOne({ _id: templateId, userId });
+      if (!template) return fail(res, 'Template not found', 404);
+      if (template.metaStatus !== 'APPROVED') return fail(res, 'Template is not approved by Meta', 400);
+    } else if (messageType === 'image' || messageType === 'pdf') {
+      if (!req.file) return fail(res, 'File is required for image/pdf type', 400);
+      try {
+        const uploadRes = await uploadBuffer({
+          buffer: req.file.buffer,
+          filename: req.file.originalname,
+          mimetype: req.file.mimetype,
+          folder: 'bulk-media',
+        });
+        mediaUrl = uploadRes.url;
+      } catch (err) {
+        return fail(res, 'Failed to upload media to R2', 500);
+      }
+    } else if (messageType === 'text') {
+      if (!message) return fail(res, 'Message text is required', 400);
+    } else if (!templateId) {
+      return fail(res, 'Template or Message is required', 400);
+    }
 
     let phoneList = [];
 
@@ -89,18 +110,31 @@ exports.sendBulkMessage = async (req, res) => {
       for (let i = 0; i < phoneList.length; i++) {
         const { phone, name } = phoneList[i];
         try {
-          const bodyParams = (template.sampleParams || []).map((p) => p.value || '');
-          const langCode = (template.languageCode || 'en').toLowerCase().replace('_', '_');
-          const apiRes = await whatsapp.sendTemplateMessage(
-            userId, phone,
-            template.whatsappTemplateName || template.name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, ''),
-            langCode,
-            bodyParams.length ? { body: bodyParams } : []
-          );
-          console.log(`[BulkMessage] Sent to ${phone} — wamid: ${apiRes?.messages?.[0]?.id}`);
-          const wamid = apiRes?.messages?.[0]?.id || '';
+          let wamid = '';
+          let msgBody = message || (template ? (template.bodyText || template.name) : '');
+          let dbType = templateId ? 'template' : (messageType || 'text');
 
-          const msgBody = template.bodyText || template.name;
+          if (templateId && template) {
+            const bodyParams = (template.sampleParams || []).map((p) => p.value || '');
+            const langCode = (template.languageCode || 'en').toLowerCase().replace('_', '_');
+            const apiRes = await whatsapp.sendTemplateMessage(
+              userId, phone,
+              template.whatsappTemplateName || template.name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, ''),
+              langCode,
+              bodyParams.length ? { body: bodyParams } : []
+            );
+            wamid = apiRes?.messages?.[0]?.id || '';
+          } else if (messageType === 'image' || messageType === 'pdf') {
+            const typeEnum = messageType === 'pdf' ? 'document' : 'image';
+            const apiRes = await whatsapp.sendMediaMessage(userId, phone, typeEnum, mediaUrl, message || '');
+            wamid = apiRes?.messages?.[0]?.id || '';
+            msgBody = message ? `[${typeEnum}] ${message}` : `[${typeEnum}]`;
+          } else {
+            const apiRes = await whatsapp.sendTextMessage(userId, phone, message);
+            wamid = apiRes?.messages?.[0]?.id || '';
+          }
+
+          console.log(`[BulkMessage] Sent to ${phone} — wamid: ${wamid}`);
 
           // Upsert conversation
           let conv = await Conversation.findOne({ userId, customerPhone: phone });
@@ -126,7 +160,8 @@ exports.sendBulkMessage = async (req, res) => {
             from: 'business',
             to: phone,
             body: msgBody,
-            type: 'template',
+            type: dbType,
+            mediaUrl: mediaUrl || '',
             status: 'sent',
             whatsappMessageId: wamid,
           });
@@ -172,7 +207,7 @@ exports.getBulkHistory = async (req, res) => {
       userId,
       direction: 'outbound',
       from: 'business',
-      type: 'text',
+      type: { $in: ['text', 'image', 'pdf', 'document', 'template'] },
     })
       .sort({ createdAt: -1 })
       .limit(200)
@@ -184,7 +219,7 @@ exports.getBulkHistory = async (req, res) => {
       const minute = new Date(m.createdAt).toISOString().slice(0, 16);
       const key = `${minute}_${m.body?.slice(0, 30)}`;
       if (!grouped[key]) {
-        grouped[key] = { message: m.body, sentAt: m.createdAt, sent: 0, failed: 0, numbers: [] };
+        grouped[key] = { message: m.body, sentAt: m.createdAt, type: m.type, mediaUrl: m.mediaUrl || '', sent: 0, failed: 0, numbers: [] };
       }
       if (m.status === 'failed') grouped[key].failed++;
       else grouped[key].sent++;
