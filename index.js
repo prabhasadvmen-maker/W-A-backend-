@@ -41,6 +41,8 @@ app.use(
         process.env.CLIENT_URL,
         'http://localhost:5173',
         'http://localhost:3000',
+        'https://eatoggy.online',
+        'https://www.eatoggy.online',
       ].filter(Boolean);
       if (!origin || allowed.includes(origin)) {
         callback(null, true);
